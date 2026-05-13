@@ -1,0 +1,338 @@
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+import scipy.stats as stats
+import re
+from sklearn.preprocessing import LabelEncoder, StandardScaler
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import LinearRegression
+from sklearn.pipeline import Pipeline
+from sklearn.impute import SimpleImputer
+from sklearn.feature_selection import f_regression
+from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
+import warnings
+warnings.filterwarnings('ignore')
+
+df = pd.read_excel('/content/gpa.xlsx')
+print(f'Shape: {df.shape}')
+df.head()
+
+print(df.info())
+df.describe()
+
+df.rename(columns={
+    'GPA tích lũy':           'GPA',
+    'Khóa':                   'Khoa',
+    'Nhóm ngành':             'Nganh',
+    'Số giờ tự học/tuần':     'TuHoc',
+    'Số môn đăng ký':         'SoMon',
+    'Làm thêm (Part-time)':   'LamThem',
+    'Thời gian ngủ':          'Ngu',
+    'Tham gia CLB':           'CLB',
+    'Tỷ lệ chuyên cần':       'ChuyenCan',
+    'Phương pháp học tập':    'PhuongPhap',
+    'Thời gian mạng xã hội':  'MXH'
+}, inplace=True)
+
+# Rút gọn nhãn nhóm ngành
+nganh_map = {
+    'Kinh tế (Logistics, Quản trị kinh doanh, Kinh doanh quốc tế, Marketing..)': 'Kinh tế',
+    'Toán (các ngành Toán, phân tích rủi ro, Khoa học dữ liệu, Phân tích dữ liệu,...)': 'Toán',
+    'Kỹ thuật (Robot, Công nghệ Logistics, Kiến trúc,...)': 'Kỹ thuật',
+    'IT hoặc ngành lai (Công nghệ thông tin, Khoa học máy tính, Hệ thống thông tin, Martech, Fintech,...)': 'IT'
+}
+df['Nganh'] = df['Nganh'].replace(nganh_map)
+
+df.head()
+
+print(f'Số dòng trùng: {df.duplicated().sum()}')
+print(df.isnull().sum())
+
+plt.figure(figsize=(10, 5))
+sns.histplot(df['GPA'], kde=True, bins=20, color='skyblue')
+plt.xlabel('GPA tích lũy')
+plt.ylabel('Số lượng')
+plt.title('Phân phối GPA tích lũy')
+plt.tight_layout()
+plt.show()
+
+fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+axes[0].hist(df['TuHoc'], bins=20, rwidth=0.8, color='steelblue')
+axes[0].set_xlabel('Số giờ tự học')
+axes[0].set_ylabel('Count')
+axes[0].set_title('Histogram – Số giờ tự học')
+axes[1].hist(df['SoMon'], bins=20, rwidth=0.8, color='coral')
+axes[1].set_xlabel('Số môn đăng ký')
+axes[1].set_ylabel('Count')
+axes[1].set_title('Histogram – Số môn đăng ký')
+plt.tight_layout()
+plt.show()
+
+fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+sns.boxplot(y=df['TuHoc'], ax=axes[0])
+axes[0].set_title('Boxplot – Số giờ tự học (TuHoc)')
+
+sns.boxplot(y=df['SoMon'], ax=axes[1])
+axes[1].set_title('Boxplot – Số môn đăng ký (SoMon)')
+
+plt.tight_layout()
+plt.show()
+
+fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+sns.boxplot(x='ChuyenCan', y='GPA', data=df, ax=axes[0])
+axes[0].set_title('Tỷ lệ chuyên cần vs GPA')
+axes[0].tick_params(axis='x', rotation=15)
+
+sns.boxplot(x='LamThem', y='GPA', data=df, ax=axes[1])
+axes[1].set_title('Làm thêm vs GPA')
+
+plt.tight_layout()
+plt.show()
+
+sns.lmplot(x='TuHoc', y='GPA', data=df, scatter_kws={'alpha': 0.4})
+plt.title('Số giờ tự học vs GPA')
+plt.tight_layout()
+plt.show()
+
+cols_plot = ['GPA', 'TuHoc', 'SoMon', 'Nganh']
+sns.pairplot(df[cols_plot], hue='Nganh', height=2.5, aspect=1.2,
+             diag_kind='kde', palette='viridis')
+plt.suptitle('Pairplot các biến số theo Nhóm ngành', y=1.02)
+plt.show()
+
+for col in ['TuHoc', 'SoMon']:
+    mean_ = np.nanmean(df[col])
+    std_  = np.nanstd(df[col])
+    df[f'zscore_{col}'] = (df[col] - mean_) / std_
+    z3  = mean_ + 3 * std_
+    zm3 = mean_ - 3 * std_
+    n_out = df[(df[f'zscore_{col}'] < -3) | (df[f'zscore_{col}'] > 3)].shape[0]
+    print(f'{col}: z=+3 → {z3:.2f}, z=-3 → {zm3:.2f} | Outliers Z-score: {n_out}')
+
+print()
+# IQR
+for col in ['TuHoc', 'SoMon']:
+    Q1 = df[col].quantile(0.25)
+    Q3 = df[col].quantile(0.75)
+    IQR = Q3 - Q1
+    lower = Q1 - 1.5 * IQR
+    upper = Q3 + 1.5 * IQR
+    n_out = df[(df[col] < lower) | (df[col] > upper)].shape[0]
+    print(f'{col}: IQR lower={lower:.2f}, upper={upper:.2f} | Outliers IQR: {n_out}')
+
+# IQR cho GPA
+Q1_gpa = df['GPA'].quantile(0.25)
+Q3_gpa = df['GPA'].quantile(0.75)
+IQR_gpa = Q3_gpa - Q1_gpa
+lower_gpa = Q1_gpa - 1.5 * IQR_gpa
+print(f'\nGPA Lower bound (IQR): {lower_gpa:.2f}')
+
+
+def random_from_range(value, upper_bound=None):
+    if pd.isna(value):
+        return np.nan
+    value = str(value).strip()
+    nums = re.findall(r'\d+', value)
+    if not nums:
+        return np.nan
+    if len(nums) >= 2:
+        low, high = float(nums[0]), float(nums[1])
+        mid = (low + high) / 2
+        std = (high - low) / 4
+        return round(np.clip(np.random.normal(mid, std), low, high), 1)
+    num = float(nums[0])
+    if re.search(r'trên|>', value, re.IGNORECASE):
+        high = upper_bound or num + 5
+        mid  = (num + high) / 2
+        std  = (high - num) / 4
+        return round(np.clip(np.random.normal(mid, std), num, high), 1)
+    if re.search(r'dưới|<', value, re.IGNORECASE):
+        mid = num / 2
+        std = num / 4
+        return round(np.clip(np.random.normal(mid, std), 0, num), 1)
+    return num
+
+np.random.seed(42)
+
+# Tạo bản copy để xử lý
+data_ml = df.copy()
+data_ml = data_ml[data_ml['GPA'] >= 2.98].copy()   # loại GPA quá thấp
+
+# Convert categorical → numeric liên tục
+data_ml['Ngu_so']      = data_ml['Ngu'].apply(lambda x: random_from_range(x, upper_bound=10))
+data_ml['ChuyenCan_so'] = data_ml['ChuyenCan'].apply(lambda x: random_from_range(x, upper_bound=100))
+data_ml['MXH_so']      = data_ml['MXH'].apply(lambda x: random_from_range(x, upper_bound=12))
+
+# Encode binary
+data_ml['LamThem'] = data_ml['LamThem'].map({'Có': 1, 'Không': 0})
+data_ml['CLB']     = data_ml['CLB'].map({'Có': 1, 'Không': 0})
+
+# One-hot encode Phương pháp học
+data_ml = pd.get_dummies(data_ml, columns=['PhuongPhap'], prefix='PP', dtype=int)
+
+# Label encode Khóa
+data_ml['Khoa'] = LabelEncoder().fit_transform(data_ml['Khoa'])
+
+# Drop cột gốc đã thay thế + cột không cần
+drop_cols = ['Ngu', 'ChuyenCan', 'MXH', 'Nganh']
+zscore_cols = [c for c in data_ml.columns if c.startswith('zscore_')]
+data_ml.drop(columns=drop_cols + zscore_cols, errors='ignore', inplace=True)
+
+print(f'Shape sau tiền xử lý: {data_ml.shape}')
+data_ml.head()
+
+data_ml['HieuSuatHoc']   = data_ml['TuHoc'] / data_ml['SoMon']
+data_ml['ApLucHocTap']   = data_ml['SoMon'] * data_ml['LamThem']
+data_ml['ChatLuongHoc']  = data_ml['TuHoc'] * (data_ml['ChuyenCan_so'] / 100)
+data_ml['CanBang']       = data_ml['Ngu_so'] / (data_ml['TuHoc'] / 7 + 1)
+data_ml['TuongTacXaHoi'] = data_ml['CLB'] * data_ml['MXH_so']
+print(['HieuSuatHoc', 'ApLucHocTap', 'ChatLuongHoc', 'CanBang', 'TuongTacXaHoi'])
+
+numeric_df = data_ml.select_dtypes(include=[np.number])
+corr_matrix = numeric_df.corr()
+
+plt.figure(figsize=(16, 13))
+sns.heatmap(corr_matrix, annot=True, cmap='coolwarm', fmt='.2f',
+            linewidths=0.5, square=True)
+plt.title('Ma trận tương quan giữa các features và GPA', fontsize=14)
+plt.tight_layout()
+plt.show()
+
+print('\nTương quan với GPA (sorted):')
+print(corr_matrix['GPA'].sort_values(ascending=False))
+
+X_all = data_ml.select_dtypes(exclude=[object]).drop(['GPA'], axis=1)
+y_all = data_ml['GPA']
+
+f_scores, p_values = f_regression(X_all.fillna(X_all.median()), y_all)
+
+importance_df = pd.DataFrame({
+    'Feature': X_all.columns,
+    'F_score': f_scores,
+    'p_value': p_values
+}).sort_values(by='F_score', ascending=False)
+
+plt.figure(figsize=(12, 8))
+sns.barplot(x='F_score', y='Feature', data=importance_df, palette='viridis')
+plt.title('Tầm quan trọng của các đặc trưng đối với GPA (F-Statistic)')
+plt.tight_layout()
+plt.show()
+
+print(importance_df.to_string(index=False))
+
+selected_features = [
+    'TuHoc', 'SoMon', 'LamThem', 'CLB',
+    'Ngu_so', 'ChuyenCan_so', 'MXH_so',
+    'HieuSuatHoc', 'ApLucHocTap', 'ChatLuongHoc', 'CanBang', 'TuongTacXaHoi'
+]
+pp_cols = [c for c in data_ml.columns if c.startswith('PP_')]
+selected_features += pp_cols
+
+X = data_ml[selected_features]
+y = data_ml['GPA']
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+print(f'Train: {X_train.shape} | Test: {X_test.shape}')
+
+# Pipeline với imputer + scaler
+num_pipeline = Pipeline([
+    ('imputer', SimpleImputer(strategy='median')),
+    ('scaler',  StandardScaler())
+])
+
+X_train_prep = num_pipeline.fit_transform(X_train)
+X_test_prep  = num_pipeline.transform(X_test)
+
+model = LinearRegression()
+model.fit(X_train_prep, y_train)
+
+y_pred = model.predict(X_test_prep)
+
+r2   = r2_score(y_test, y_pred)
+mae  = mean_absolute_error(y_test, y_pred)
+rmse = np.sqrt(mean_squared_error(y_test, y_pred))
+
+print(f'R²   : {r2:.4f}')
+print(f'MAE  : {mae:.4f}')
+print(f'RMSE : {rmse:.4f}')
+
+coef_df = pd.DataFrame({
+    'Feature': selected_features,
+    'Coefficient': model.coef_
+}).sort_values(by='Coefficient', key=abs, ascending=False)
+print(coef_df.to_string(index=False))
+
+plt.figure(figsize=(8, 6))
+plt.scatter(y_test, y_pred, alpha=0.5, c='blue', edgecolors='k', linewidth=0.5)
+plt.plot([y_test.min(), y_test.max()], [y_test.min(), y_test.max()], 'r--', lw=2)
+plt.xlabel('GPA Thực tế (Actual)', fontsize=12)
+plt.ylabel('GPA Dự đoán (Predicted)', fontsize=12)
+plt.title(f'Actual vs Predicted  (R² = {r2:.4f})', fontsize=14)
+plt.grid(True, alpha=0.3)
+plt.tight_layout()
+plt.show()
+
+residuals = y_test - y_pred
+
+fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+
+# Histogram residuals
+axes[0].hist(residuals, bins=20, edgecolor='black', alpha=0.7, color='green')
+axes[0].axvline(x=0, color='r', linestyle='--', lw=2)
+axes[0].set_xlabel('Sai số (Residuals)')
+axes[0].set_ylabel('Tần số')
+axes[0].set_title(f'Phân phối sai số (Mean={residuals.mean():.4f})')
+axes[0].grid(True, alpha=0.3)
+
+# Q-Q plot
+stats.probplot(residuals, dist='norm', plot=axes[1])
+axes[1].set_title('Q-Q Plot – Kiểm tra phân phối chuẩn')
+axes[1].grid(True, alpha=0.3)
+
+# Residuals vs Fitted
+axes[2].scatter(y_pred, residuals, alpha=0.5, edgecolors='k', facecolors='none')
+sns.regplot(x=y_pred, y=residuals, lowess=True,
+            line_kws={'color': 'red', 'lw': 1.5},
+            scatter_kws={'alpha': 0}, ax=axes[2])
+axes[2].axhline(y=0, color='gray', linestyle='--', alpha=0.7)
+axes[2].set_xlabel('Giá trị dự đoán (Fitted)')
+axes[2].set_ylabel('Phần dư (Residuals)')
+axes[2].set_title('Residuals vs Fitted')
+axes[2].grid(True, alpha=0.3)
+
+plt.tight_layout()
+plt.show()
+
+top3 = ['ChuyenCan_so', 'TuHoc', 'MXH_so']
+X_s = data_ml[top3]
+y_s = data_ml['GPA']
+
+X_tr, X_te, y_tr, y_te = train_test_split(X_s, y_s, test_size=0.2, random_state=42)
+model_s = LinearRegression().fit(X_tr, y_tr)
+y_pr    = model_s.predict(X_te)
+
+print('=== Mô hình đơn giản (top 3 features) ===')
+print(f'MAE : {mean_absolute_error(y_te, y_pr):.4f}')
+print(f'R²  : {r2_score(y_te, y_pr):.4f}')
+
+# Visualization
+plt.figure(figsize=(10, 6))
+x_range = np.linspace(X_tr['ChuyenCan_so'].min(), X_tr['ChuyenCan_so'].max(), 100)
+x_plot  = pd.DataFrame({
+    'ChuyenCan_so': x_range,
+    'TuHoc': X_tr['TuHoc'].mean(),
+    'MXH_so': X_tr['MXH_so'].mean()
+})
+plt.scatter(X_tr['ChuyenCan_so'], y_tr, color='red', alpha=0.5, label='Train')
+plt.scatter(X_te['ChuyenCan_so'], y_te, color='blue', alpha=0.5, label='Test')
+plt.plot(x_range, model_s.predict(x_plot), color='green', lw=2, label='Đường hồi quy')
+plt.title('Tỷ lệ chuyên cần vs GPA (các biến khác giữ cố định ở mean)')
+plt.xlabel('Tỷ lệ chuyên cần (%)')
+plt.ylabel('GPA tích lũy')
+plt.legend()
+plt.grid(True)
+plt.tight_layout()
+plt.show()
+
+
